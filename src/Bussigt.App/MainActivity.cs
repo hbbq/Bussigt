@@ -10,6 +10,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Bussigt.App.Extensions;
 using Android.Locations;
+using Stranne.VasttrafikNET;
 
 namespace Bussigt.App
 {
@@ -20,6 +21,9 @@ namespace Bussigt.App
         private GoogleMap map;
         private bool firstPos = true;
         float sze = 100;
+
+        private string vtKey = "uoR8tQVixIzM3qWXEjX3TMqoCfAa";
+        private string vtSecret = "d4gjeLlFUJhyjmoTMdEAm61SIK4a";
 
         protected override void OnCreate(Bundle bundle)
         {
@@ -52,9 +56,9 @@ namespace Bussigt.App
 
             _cts = new CancellationTokenSource();
             Task.Factory.StartNewTaskContinuously(
-                GetPositions,
+                GetPositions,                
                 _cts.Token,
-                TimeSpan.FromMilliseconds(500)
+                TimeSpan.FromSeconds(1)
             );
 
         }
@@ -68,31 +72,98 @@ namespace Bussigt.App
 
         int b = 0;
         Location l = null;
+        JourneyPlannerService vtService = null;
+
+        double minLat = 0;
+        double minLon = 0;
+        double maxLat = 0;
+        double maxLon = 0;
 
         private void GetPositions()
         {
 
-            if (l == null) return;
+            if (map == null) return;
 
-            RunOnUiThread(() => map.Clear());
-                        
-            overlays.Clear();
+            try
+            {
 
-            var over = new GroundOverlayOptions();
-            over.Position(new LatLng(l.Latitude, l.Longitude), sze, sze);
-            over.InvokeImage(GetCustomBitmapDescriptor("500 >"));
-            //over.InvokeImage(BitmapDescriptorFactory.FromResource(Resource.Drawable.Icon));
-            over.InvokeBearing(b);
-            over.InvokeZIndex(9999);
+                var ls = new Location(l);
+                RunOnUiThread(() =>
+                {
+                    ls.Latitude = (map.Projection.VisibleRegion.FarLeft.Latitude + map.Projection.VisibleRegion.FarRight.Latitude) / 2;
+                    ls.Longitude = (map.Projection.VisibleRegion.FarLeft.Longitude + map.Projection.VisibleRegion.FarRight.Longitude) / 2;
+                });
 
-            RunOnUiThread(() => {
-                var x = map.AddGroundOverlay(over);
-                overlays.Add("500", x);
-            });
+                vtService = vtService ?? new JourneyPlannerService(vtKey, vtSecret, Guid.NewGuid().ToString());
 
+                var l1 = ls.GoNorth(2000).GoWest(2000);
+                var l2 = ls.GoSouth(2000).GoEast(2000);
 
-            b = (b + 5) % 360;
+                //var minLat = Math.Min(l1.Latitude, l2.Latitude);
+                //var maxLat = Math.Max(l1.Latitude, l2.Latitude);
+                //var minLon = Math.Min(l1.Longitude, l2.Longitude);
+                //var maxLon = Math.Max(l1.Longitude, l2.Longitude);
 
+                RunOnUiThread(() =>
+                {
+                    minLat = map.Projection.VisibleRegion.LatLngBounds.Southwest.Latitude;
+                    minLon = map.Projection.VisibleRegion.LatLngBounds.Southwest.Longitude;
+                    maxLat = map.Projection.VisibleRegion.LatLngBounds.Northeast.Latitude;
+                    maxLon = map.Projection.VisibleRegion.LatLngBounds.Northeast.Longitude;
+                });
+
+                if (minLat == 0 && maxLat == 0) return;
+
+                var result = vtService.GetLiveMap(minLon, maxLon, minLat, maxLat, true);
+
+                RunOnUiThread(() => map.Clear());
+
+                overlays.Clear();
+
+                foreach (var vehicle in result.Vehicles)
+                {
+
+                    var over = new GroundOverlayOptions();
+                    //over.Position(new LatLng(l.Latitude, l.Longitude), sze, sze);
+                    over.Position(new LatLng(vehicle.Y / 1000000.0, vehicle.X / 1000000.0), sze, sze);
+                    over.InvokeImage(GetCustomBitmapDescriptor(vehicle.Name.PadRight(4, ' ') + ">"));
+                    //over.InvokeImage(BitmapDescriptorFactory.FromResource(Resource.Drawable.Icon));
+                    over.InvokeBearing((float)((32.0 - (double)vehicle.Direction) * 360.0 / 32.0));
+                    over.InvokeZIndex(9999);
+
+                    RunOnUiThread(() =>
+                    {
+                        var x = map.AddGroundOverlay(over);
+                        overlays.Add(vehicle.Gid.ToString(), x);
+                    });
+
+                }
+
+                b = (b + 5) % 360;
+
+                if (overlays.Count > 0)
+                {
+                    Thread.Sleep(20000);
+                }
+                else
+                {
+                    Thread.Sleep(2000);
+                }
+
+            }
+            catch (Exception ex)
+            {
+
+                RunOnUiThread(() => map.Clear());
+
+                vtService = null;
+
+                System.Diagnostics.Debug.WriteLine(ex.Message);
+
+                Thread.Sleep(TimeSpan.FromSeconds(2));
+
+            }
+            
         }
 
         public void OnMapReady(GoogleMap googleMap)
@@ -102,7 +173,7 @@ namespace Bussigt.App
             map.MyLocationEnabled = true;
             map.MyLocationChange += Map_MyLocationChange;
             map.CameraChange += Map_CameraChange;
-            
+
         }
 
         private void Map_CameraChange(object sender, GoogleMap.CameraChangeEventArgs e)
@@ -123,7 +194,7 @@ namespace Bussigt.App
             {
                 o.SetDimensions(sze, sze);
             }
-
+            
         }
 
         private BitmapDescriptor GetCustomBitmapDescriptor(string text)
@@ -176,10 +247,11 @@ namespace Bussigt.App
             {
                 map.AnimateCamera(CameraUpdateFactory.NewLatLngZoom(new LatLng(e.Location.Latitude, e.Location.Longitude), 13));
                 firstPos = false;
+
             }
             else
             {
-                map.AnimateCamera(CameraUpdateFactory.NewLatLng(new LatLng(e.Location.Latitude, e.Location.Longitude)));
+                //map.AnimateCamera(CameraUpdateFactory.NewLatLng(new LatLng(e.Location.Latitude, e.Location.Longitude)));
             };
         }
 
